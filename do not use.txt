@@ -1,0 +1,105 @@
+# pip3 install flask opencv-python
+from flask import Flask, render_template, request, flash
+from werkzeug.utils import secure_filename
+import os
+import cv2
+import logging
+import time
+import schedule
+from image_convert import img_to_greyscale, img_to_jpg, img_to_pdf, img_to_png, img_to_webp
+import dropbox
+import numpy as np
+
+# UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'png', 'webp', 'jpg', 'jpeg', 'gif'}
+
+app = Flask(__name__)
+app.secret_key = 'super secret key'
+
+logging.basicConfig(filename='app.log', level=logging.ERROR)
+DROPBOX_ACCESS_TOKEN = 'DROPBOX API KEY'
+DROPBOX_FOLDER = '/uploaded'
+app.config['UPLOAD_FOLDER'] = DROPBOX_FOLDER
+
+dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+
+
+###############log file cleared#########
+def clear_log_file():
+    while True:
+        time.sleep(1)  # Sleep for 30 minutes
+        with open('app.log', 'w'):
+            pass
+        logging.info('Log file cleared.')
+
+schedule.every(10).seconds.do(clear_log_file)
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+@app.route("/about")
+def about():
+    return render_template("about.html")
+
+################################## Image processing #######################################
+def processImage(filename, operation):
+    print(f"the operation is {operation} and filename is {filename}")
+    img = cv2.imread(f"{DROPBOX_FOLDER}/{filename}")
+
+    operation_functions = {
+        "cgray": lambda: img_to_greyscale(filename, operation, img),
+        "cwebp": lambda: img_to_webp(filename, operation, img),
+        "cjpg": lambda: img_to_jpg(filename, operation, img),
+        "cpng": lambda: img_to_png(filename, operation, img),
+        "cpdf": lambda: img_to_pdf(filename, operation, img),
+    }
+
+    try:
+        if operation in operation_functions:
+            newfile = operation_functions[operation]()
+            return newfile
+        else:
+            return "nothing matched"
+    except Exception as e:
+        logging.error('Exception',e)
+        flash(f"something happened unusual {e}")
+        return render_template("index.html")
+
+@app.route("/edit", methods=["GET", "POST"])
+def edit():
+    if request.method == "POST": 
+        operation = request.form.get("operation")
+        # check if the post request has the file part
+        if 'file' not in request.files:
+            flash('No file part')
+            return "error"
+        file = request.files['file']
+        # If the user does not select a file, the browser submits an
+        # empty file without a filename.
+        if file.filename == '':
+            flash('No selected file')
+            return "error no selected file"
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            # file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            dbx.files_upload(file.read(), DROPBOX_FOLDER + '/' + file.filename)
+            new = processImage(filename, operation)
+            flash(f"Your image has been processed and is available <a href='/{new}' target='_blank'>here</a>")
+            return render_template("index.html")
+
+    return render_template("index.html")
+
+# ##########################image processing finished############################
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', debug=True)
+    clear_log_file()
+    # Run scheduled tasks in a loop
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
